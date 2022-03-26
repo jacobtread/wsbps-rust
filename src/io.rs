@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::hash::Hash;
 use std::io::{Read, Write};
 use std::iter;
 
@@ -149,7 +151,7 @@ impl RW for String {
 impl<T: RW> RW for Vec<T> {
     fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
         let length = VarInt::read(i)
-            .context("invalid string length varint")?.0 as usize;
+            .context("invalid vec length varint")?.0 as usize;
         iter::repeat_with(|| T::read(i))
             .take(length)
             .collect::<anyhow::Result<Vec<T>>>()
@@ -186,6 +188,45 @@ impl<T: RW> RW for Option<T> {
             None => {
                 false.write(o)?;
             }
+        }
+        Ok(())
+    }
+}
+
+/// ## Hashmaps
+/// Hashmaps are encoded as a VarInt for the total number of entries that are
+/// being encoded then each entry is encoded as the key then the value. Using
+/// the respective RW implementation for each.
+///
+/// Note: Key's must implement Eq + Hash + Clone
+///
+/// ## Encoding
+/// Length: VarInt
+/// for Length {
+///     Key: K
+///     Value: V
+/// }
+///
+///
+impl<K: RW + Eq + Hash + Clone, V: RW> RW for HashMap<K, V> {
+    fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
+        let length = VarInt::read(i)
+            .context("invalid hashmap length varint")?.0 as usize;
+        let mut out = HashMap::with_capacity(length);
+        for _ in 0..length {
+            let key = K::read(i)?;
+            let value = V::read(i)?;
+            out.insert(key, value);
+        }
+        Ok(out)
+    }
+
+    fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
+        VarInt(self.len() as u64).write(o);
+        for (key, value) in self {
+            let mut kc = key.clone();
+            K::write(&mut kc, o);
+            V::write(value, o);
         }
         Ok(())
     }
