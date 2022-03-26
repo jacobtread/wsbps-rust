@@ -25,7 +25,7 @@ macro_rules! define_packets {
                 $name:ident ($id:literal) {
                     $(
                         $field:ident: $type:ty
-                    )*
+                    ),*
                 }
             )*
         }

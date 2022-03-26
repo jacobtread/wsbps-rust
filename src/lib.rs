@@ -16,9 +16,7 @@ mod tests {
     fn it_works() {
         define_packets! {
             Packets {
-                TestPacket (0x05) {
-                    test: VarInt
-                }
+                TestPacket (0x05) { test: VarInt, a: u8 }
 
                 ExamplePacket (0x06) {
                     test: u8
@@ -26,7 +24,8 @@ mod tests {
             }
         }
         let mut t = TestPacket {
-            test: VarInt(2)
+            test: VarInt(2),
+            a: 1,
         };
         let mut out: Vec<u8> = Vec::new();
         t.write(&mut out);
