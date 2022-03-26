@@ -1,113 +1,116 @@
-use std::collections::HashMap;
-use std::ffi::c_void;
-use std::hash::Hash;
 use std::io::{Read, Write};
 use std::iter;
-use std::iter::Map;
 
 use anyhow::{Context, Result};
 use byteorder::{ReadBytesExt, WriteBytesExt};
 
+/// Traits for something that can be both read and written
+/// reads will returns self which must be sized
+pub trait RW: Send + Sync {
+    /// Reads self from the provided source [i]
+    fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized;
+    // Writes self to the the provided source [o]
+    fn write<B: Write>(&mut self, o: &mut B) -> Result<()>;
+}
+
+/// Read write traits on u8 & i8 need to be implemented manually because
+/// the underlying function in ReadBytesExt doesn't take a generic
+/// argument like the other primitive number ones do
+impl RW for u8 {
+    fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
+        B::read_u8(i).map_err(anyhow::Error::from)
+    }
+
+    fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
+        o.write_u8(*self)?;
+        Ok(())
+    }
+}
+
+impl RW for i8 {
+    fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
+        B::read_i8(i).map_err(anyhow::Error::from)
+    }
+
+    fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
+        o.write_i8(*self)?;
+        Ok(())
+    }
+}
+
+/// Boolean values are encoded as a single unsigned byte (u8)
+/// 1 being true and 0 being false
+impl RW for bool {
+    fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
+        let byte = u8::read(i)?;
+        match byte {
+            0 => Ok(false),
+            1 => Ok(true),
+            _ => anyhow::bail!("invalid boolean expected 0 or 1")
+        }
+    }
+
+    fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
+        o.write_u8(*self as u8)?;
+        Ok(())
+    }
+}
+
+/// ## VarInts
+/// Type for a var int aka an integer with variable size can be serialized in the
+/// form of u8 all the way up to u64 great way for sending numbers that could be
+/// a variety of different lengths (e.g String or ByteArray lengths)
+///
+/// ## Encoding:
+/// VarInts are serialized 7 bits at a time starting with the least significant
+/// bits the most significant bit (msb) in each output byte indicates if there is
+/// a continuation byte (msb = 1)
+///
+/// ## Examples:
+///
+/// | VarInt | Binary                     |
+/// |--------|----------------------------|
+/// | 1      | 00000001                   |
+/// | 127    | 01111111                   |
+/// | 128    | 10000000 00000001          |
+/// | 255    | 11111111 00000001          |
+/// | 300    | 10101100 00000010          |
+/// | 16384  | 10000000 10000000 00000001 |
 #[derive(Debug, Clone, PartialEq)]
 pub struct VarInt(pub u64);
 
+impl From<u64> for VarInt { fn from(v: u64) -> Self { VarInt(v) } }
 
-impl From<u64> for VarInt {
-    fn from(v: u64) -> Self {
-        VarInt(v)
-    }
-}
+impl From<VarInt> for u64 { fn from(v: VarInt) -> Self { v.0 } }
 
-impl From<VarInt> for u64 {
-    fn from(v: VarInt) -> Self {
-        v.0
-    }
-}
-
-pub trait Readable: Send + Sync {
-    fn read<T: Read>(buf: &mut T) -> Result<Self> where Self: Sized;
-}
-
-pub trait Writeable: Send + Sync {
-    fn write<B: Write>(&mut self, buf: &mut B) -> Result<()>;
-}
-
-impl Readable for u8 {
-    fn read<B: Read>(buf: &mut B) -> Result<Self> where Self: Sized {
-        B::read_u8(buf).map_err(anyhow::Error::from)
-    }
-}
-
-impl Writeable for u8 {
-    fn write<B: Write>(&mut self, buf: &mut B) -> Result<()> {
-        buf.write_u8(*self)?;
-        Ok(())
-    }
-}
-
-impl Readable for i8 {
-    fn read<B: Read>(buf: &mut B) -> Result<Self> where Self: Sized {
-        buf.read_i8().map_err(anyhow::Error::from)
-    }
-}
-
-impl Writeable for i8 {
-    fn write<B: Write>(&mut self, buf: &mut B) -> Result<()> {
-        buf.write_i8(*self)?;
-        Ok(())
-    }
-}
-
-impl Readable for bool {
-    fn read<B: Read>(buf: &mut B) -> Result<Self> where Self: Sized {
-        let byte = u8::read(buf)?;
-        if byte == 1 {
-            Ok(true)
-        } else if byte == 0 {
-            Ok(false)
-        } else {
-            anyhow::bail!("Invalid boolean");
-        }
-    }
-}
-
-impl Writeable for bool {
-    fn write<B: Write>(&mut self, buf: &mut B) -> Result<()> {
-        buf.write_u8(if *self { 1 } else { 0 })?;
-        Ok(())
-    }
-}
-
-impl Readable for VarInt {
-    fn read<B: Read>(buf: &mut B) -> Result<Self> where Self: Sized {
-        let mut num_read = 0;
+impl RW for VarInt {
+    fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
+        let mut byte_offset = 0;
         let mut result = 0;
         loop {
-            let read = buf.read_u8()?;
-            let value = u64::from(read & 0b0111_1111);
-            result |= value.overflowing_shl(7 * num_read).0;
-            num_read += 1;
-            if num_read > 10 {
-                anyhow::bail!("VarInt too long! Expected 10 bytes of length, value read so far: {}", result);
+            let read = i.read_u8()?;
+            let value = u64::from(read & 0b0111_1111 /* 0x7F */);
+            result |= value.overflowing_shl(byte_offset).0;
+            byte_offset += 7;
+            if byte_offset > 70 {
+                anyhow::bail!("VarInt overflow value was longer than 10 bytes");
             }
-            if read & 0b1000_0000 == 0 {
+            if read & 0b1000_0000 /* 0x80 */ == 0 {
                 break;
             }
         }
-        Ok(VarInt::from(result))
+        Ok(VarInt(result))
     }
-}
 
-impl Writeable for VarInt {
-    fn write<B: Write>(&mut self, buf: &mut B) -> Result<()> {
-        let mut x = self.0 as u64;
+    fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
+        let mut x = self.0;
         loop {
-            let mut temp = (x & 0b0111_1111) as u8;
+            let mut temp = (x & 0b0111_1111  /* 0x7F */) as u8;
             x >>= 7;
             if x != 0 {
-                temp |= 0b1000_0000;
+                temp |= 0b1000_0000 /* 0x80 */;
             }
-            buf.write_u8(temp).unwrap();
+            o.write_u8(temp).unwrap();
             if x == 0 {
                 break;
             }
@@ -116,97 +119,94 @@ impl Writeable for VarInt {
     }
 }
 
-impl Readable for String {
-    fn read<B: Read>(buf: &mut B) -> Result<Self> where Self: Sized {
-        let varint = VarInt::read(buf).context("Invalid string expected var int heading")?.0;
-        let len = varint as usize;
-        let max = i16::MAX as usize;
-        if len > max { anyhow::bail!("Read string length of {}! Expected max length to be {}", len, max); };
-        let mut buffer = vec![0u8; len];
-        buf
-            .read_exact(&mut buffer)
-            .map_err(anyhow::Error::from)?;
-        Ok(String::from_utf8(buffer).context("String contained invalid UTF-8")?)
-    }
-}
-
-impl Writeable for String {
-    fn write<B: Write>(&mut self, buf: &mut B) -> Result<()> {
-        VarInt(self.len() as u64).write(buf)?;
-        buf.write_all(self.as_bytes())?;
-        Ok(())
-    }
-}
-
-impl<T: Readable> Readable for Vec<T> {
-    fn read<B: Read>(buf: &mut B) -> Result<Self> where Self: Sized {
-        let len = VarInt::read(buf)?.0 as usize;
-        iter::repeat_with(|| T::read(buf)).take(len).collect::<anyhow::Result<Vec<T>>>()
-    }
-}
-
-impl<T: Writeable> Writeable for Vec<T> {
-    fn write<B: Write>(&mut self, buf: &mut B) -> Result<()> {
-        VarInt(self.len() as u64).write(buf)?;
-        self.iter_mut().for_each(|it| it.write(buf).expect("Could not write data from vec!"));
-        Ok(())
-    }
-}
-
-
-impl<K: Readable + Eq + Hash, V: Readable> Readable for HashMap<K, V> {
-    fn read<T: Read>(buf: &mut T) -> Result<Self> where Self: Sized {
-        let len = VarInt::read(buf)?.0 as usize;
-        let mut out = HashMap::with_capacity(len);
-        for _ in 0..len {
-            let k = K::read(buf)?;
-            let v = V::read(buf)?;
-            out.insert(k, v);
+/// Strings are encoded with a VarInt that represents the length of the string
+/// and then the bytes for the specified length are the utf8 encoded bytes of the
+/// string contents
+impl RW for String {
+    fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
+        let length = VarInt::read(i)
+            .context("invalid string length varint")?.0 as usize;
+        let max_length = i16::MAX as usize;
+        if length > max_length {
+            anyhow::bail!("string length ({}) was greater than max string length size ({})", length, max_length)
         }
-        Ok(out)
+        let mut bytes = vec![0u8; length];
+        i.read_exact(&mut bytes)
+            .map_err(anyhow::Error::from)?;
+        Ok(String::from_utf8(bytes).context("string contained invalid utf8 encoding")?)
+    }
+
+    fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
+        VarInt(self.len() as u64).write(o)?;
+        o.write_all(self.as_bytes())?;
+        Ok(())
     }
 }
 
+/// Vectors are encoded with a VarInt for the length of the vector
+/// and then all the vectors are encoded after that using their
+/// respective encodings.
+impl<T: RW> RW for Vec<T> {
+    fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
+        let length = VarInt::read(i)
+            .context("invalid string length varint")?.0 as usize;
+        iter::repeat_with(|| T::read(i))
+            .take(length)
+            .collect::<anyhow::Result<Vec<T>>>()
+    }
 
-impl<T: Writeable> Writeable for Option<T> {
-    fn write<B: Write>(&mut self, buf: &mut B) -> Result<()> {
-        if let Some(value) = self {
-            true.write(buf)?;
-            value.write(buf)?;
-            return Ok(());
-        };
-
-        false.write(buf)?;
-        return Ok(());
+    fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
+        VarInt(self.len() as u64).write(o)?;
+        self.iter_mut()
+            .for_each(|it|
+                it.write(o).expect("couldn't write vec contents"));
+        Ok(())
     }
 }
 
-impl<T: Readable> Readable for Option<T> {
-    fn read<B: Read>(buf: &mut B) -> Result<Self> where Self: Sized {
-        let has_value = bool::read(buf)?;
-        if has_value {
-            Ok(Some(T::read(buf)?))
+/// Optional values are encoded with 1 byte identifier (0 or 1) which tells
+/// whether or not the value is present. If the value is present the respective
+/// RW will be used.
+impl<T: RW> RW for Option<T> {
+    fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
+        let exists = bool::read(i)?;
+        if exists {
+            Ok(Some(T::read(i)?))
         } else {
             Ok(None)
         }
     }
+
+    fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
+        match self {
+            Some(value) => {
+                true.write(o)?;
+                value.write(o)?;
+            }
+            None => {
+                false.write(o)?;
+            }
+        }
+        Ok(())
+    }
 }
 
-
-macro_rules! primitive_rw {
+/// Macro for automatically generating the RW trait implementations for
+/// the other primitive number types which all take in generic arguments
+/// for the byte order which in this case is Big Endian
+macro_rules! generate_rw {
     (
-        $($type:ident: ($read_fn:ident, $write_fn: ident))*
+        $($type:ident: ($read_fn:ident, $write_fn:ident))*
     ) => {
         $(
-            impl Readable for $type {
-                fn read<B: Read>(buf: &mut B) -> Result<Self> where Self: Sized {
-                    buf.$read_fn::<byteorder::BigEndian>().map_err(anyhow::Error::from)
+            impl RW for $type {
+                fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
+                    i.$read_fn::<byteorder::BigEndian>()
+                        .map_err(anyhow::Error::from)
                 }
-            }
 
-            impl Writeable for $type {
-                fn write<B: Write>(&mut self, buf: &mut B) -> Result<()> {
-                    buf.$write_fn::<byteorder::BigEndian>(*self)?;
+                fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
+                    o.$write_fn::<byteorder::BigEndian>(*self)?;
                     Ok(())
                 }
             }
@@ -214,7 +214,7 @@ macro_rules! primitive_rw {
     };
 }
 
-primitive_rw! {
+generate_rw! {
     u16: (read_u16, write_u16)
     u32: (read_u32, write_u32)
     u64: (read_u64, write_u64)
