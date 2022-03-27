@@ -25,11 +25,7 @@ macro_rules! impl_packet_mode {
                       .context(concat!("failed to read field `", stringify!($Field), "` of packet `", stringify!($Name), "`"))?
                       .into();
                 )*
-                Ok(Self {
-                    $(
-                        $Field,
-                    )*
-                })
+                Ok(Self { $($Field,)* })
             }
         }
     };
@@ -55,9 +51,7 @@ macro_rules! impl_group_mode {
             fn read<_ReadX: std::io::Read>(i: &mut _ReadX) -> anyhow::Result<Self> {
                 let p_id = $crate::io::VarInt::read(i)?.0;
                 match p_id {
-                    $(
-                        id if id == $ID => Ok($Group::$Name($Name::read(i)?)),
-                    )*
+                    $(id if id == $ID => Ok($Group::$Name($Name::read(i)?)),)*
                     _ => Err(anyhow::anyhow!("unknown packet id ({})", p_id)),
                 }
             }
@@ -83,15 +77,23 @@ macro_rules! impl_group_mode {
 #[macro_export]
 macro_rules! impl_struct_mode {
     ([read,write], $StructName:ident, $($StructField:ident, $StructFieldType:ty)*) => {
-        $crate::impl_struct_mode([read], $StructName, $($StructField, $StructFieldType)*)
-        $crate::impl_struct_mode([write], $StructName, $($StructField, $StructFieldType)*)
+        $crate::impl_struct_mode!([read], $StructName, $($StructField, $StructFieldType)*);
+        $crate::impl_struct_mode!([write], $StructName, $($StructField, $StructFieldType)*);
     };
     ([read], $StructName:ident, $($StructField:ident, $StructFieldType:ty)*) => {
         impl $crate::io::Readable for $StructName {
             fn read<_ReadX: std::io::Read>(i: &mut _ReadX) -> anyhow::Result<Self> where Self: Sized {
                 use anyhow::Context;
-                $(let $StructField = <$StructFieldType>::read(i).context(concat!("failed to read field `", stringify!($StructField), "` of struct `", stringify!($StructName), "`"))?.into();)*
-                Ok(Self {$($StructField,)*})
+                $(
+                    let $StructField = <$StructFieldType>::read(i)
+                        .context(concat!(
+                                "failed to read field `",
+                                stringify!($StructField),
+                                "` of struct `",
+                                stringify!($StructName), "`")
+                    )?.into();
+                )*
+                Ok(Self { $($StructField,)* })
             }
         }
     };
@@ -103,6 +105,73 @@ macro_rules! impl_struct_mode {
                 Ok(())
             }
         }
+    };
+}
+
+#[macro_export]
+macro_rules! packet_struct {
+    (
+        struct $StructName:ident $StructMode:tt {
+            $($StructField:ident: $StructFieldType:ty),*
+        }
+    ) => {
+        #[derive(Debug, Clone, PartialEq)]
+        struct $StructName {
+            $($StructField: $StructFieldType),*
+        }
+
+        $crate::impl_struct_mode!($StructMode, $StructName, $($StructField, $StructFieldType)*);
+    };
+}
+
+#[macro_export]
+macro_rules! impl_packet_data {
+    (
+        enum $EnumName:ident $EnumMode:tt ($EnumType:ident) {
+            $($EnumField:ident: $EnumValue:literal),*
+        }
+    ) => {
+
+        #[derive(Debug, Clone, PartialEq)]
+        enum $EnumName {
+            $($EnumField),*
+        }
+
+        $crate::impl_enum_mode!($EnumMode, $EnumName, $EnumType, $($EnumField, $EnumValue),*);
+
+    };
+    (
+        struct $StructName:ident $StructMode:tt {
+            $($StructField:ident: $StructFieldType:ty),*
+        }
+    ) => {
+        #[derive(Debug, Clone, PartialEq)]
+        struct $StructName {
+            $($StructField: $StructFieldType),*
+        }
+
+        $crate::impl_struct_mode!($StructMode, $StructName, $($StructField, $StructFieldType)*);
+    };
+}
+
+#[macro_export]
+macro_rules! packet_data {
+    (
+        $(
+            $Keyword:ident $Name:ident $Mode:tt $(($TypeT:ident))? {
+                $(
+                $StructField:ident: $($EnumValue:literal)?$($StructFieldType:ty)?
+                ),*
+            }
+        )*
+    ) => {
+        $(
+            $crate::impl_packet_data!(
+                $Keyword $Name $Mode $($TypeT)? {
+                    $($StructField: $($StructFieldType)? $($EnumValue)? ),*
+                }
+            );
+        )*
     };
 }
 
@@ -142,40 +211,20 @@ macro_rules! impl_enum_mode {
 }
 
 #[macro_export]
-macro_rules! packet_data {
+macro_rules! packet_enum {
     (
-        $(
-            struct $StructName:ident<$StructMode:literal> {
-                    $($StructField:ident: $StructFieldType:ty),*
-            }
-        )*
+    enum $EnumName:ident $EnumMode:tt ($EnumType:ident) {
+            $( $EnumField:ident = $EnumValue:literal),*
+    }
     ) => {
-        $(
-            #[derive(Debug, Clone, PartialEq)]
-            struct $StructName {
-                $($StructField: $StructFieldType),*
-            }
 
-            $crate::impl_struct_mode!($StructMode, $StructName, $($StructField, $StructFieldType)*)
-        )*
-    };
-    (
-        $(
-        enum $EnumName:ident $EnumMode:tt ($EnumType:ident) {
-                $( $EnumField:ident = $EnumValue:literal),*
-            }
-        )*
-    ) => {
-        $(
-            #[derive(Debug, Clone, PartialEq)]
-            enum $EnumName {
-                $(
-                    $EnumField
-                ),*
-            }
+        #[derive(Debug, Clone, PartialEq)]
+        enum $EnumName {
+            $($EnumField),*
+        }
 
-            $crate::impl_enum_mode!($EnumMode, $EnumName, $EnumType, $($EnumField, $EnumValue)*);
-        )*
+        $crate::impl_enum_mode!($EnumMode, $EnumName, $EnumType, $($EnumField, $EnumValue),*);
+
     };
 }
 

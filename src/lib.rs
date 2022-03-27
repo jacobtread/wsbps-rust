@@ -8,25 +8,18 @@ mod tests {
     use crate::io::{Readable, Writable};
     #[test]
     fn it_works() {
-        struct a {
-            a: u8,
-            b: u8,
-        }
 
         packet_data! {
-            enum TestEnum [read,write] (u8) {
-                A = 0,
-                B = 151
+            enum Test [read,write] (u8) {
+                X = 1
             }
         }
-
-
 
         packets! {
             BiPackets [read,write] {
                 0x02: TestA {
                     user: u8,
-                    test: TestEnum
+                    test: TestStruct
                 }
             }
         }
@@ -34,7 +27,10 @@ mod tests {
 
         let mut p = TestA {
             user: 12,
-            test: TestEnum::B
+            test: TestStruct {
+                a: 8,
+                b: 7
+            }
         };
         println!("{:?}", p);
 
