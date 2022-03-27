@@ -124,21 +124,56 @@ macro_rules! packet_struct {
     };
 }
 
+
+
+#[macro_export]
+macro_rules! impl_enum_mode {
+    ([read,write], $EnumName:ident, $EnumType:ty, $($EnumField:ident, $EnumValue:literal)*) => {
+        $crate::impl_enum_mode!([read], $EnumName, $EnumType, $($EnumField, $EnumValue)*);
+        $crate::impl_enum_mode!([write], $EnumName, $EnumType, $($EnumField, $EnumValue)*);
+    };
+    ([read], $EnumName:ident, $EnumType:ty, $($EnumField:ident, $EnumValue:literal)*) => {
+        impl $crate::io::Readable for $EnumName {
+            fn read<B: std::io::Read>(i: &mut B) -> anyhow::Result<Self> where Self: Sized {
+                use anyhow::Context;
+                let value = <$EnumType>::read(i)
+                    .context(concat!("failed to read value for enum `", stringify!($EnumName), "`"))?;
+                match value {
+                    $(
+                        v if v == $EnumValue => Ok($EnumName::$EnumField),
+                    )*
+                    _ => Err(anyhow::anyhow!("invalid enum value ({})", value)),
+                }
+            }
+        }
+    };
+    ([write], $EnumName:ident, $EnumType:ty, $($EnumField:ident, $EnumValue:literal)*) => {
+        impl $crate::io::Writable for $EnumName {
+            fn write<B: std::io::Write>(&mut self, o: &mut B) -> anyhow::Result<()> {
+                match self {
+                    $(
+                        $EnumName::$EnumField => <$EnumType>::write(&mut $EnumValue, o),
+                    )*
+                };
+                Ok(())
+            }
+        }
+    };
+}
+
 #[macro_export]
 macro_rules! impl_packet_data {
     (
-        enum $EnumName:ident $EnumMode:tt ($EnumType:ident) {
+        enum $EnumName:ident $EnumMode:tt ($EnumType:ty) {
             $($EnumField:ident: $EnumValue:literal),*
         }
     ) => {
-
         #[derive(Debug, Clone, PartialEq)]
         enum $EnumName {
             $($EnumField),*
         }
 
         $crate::impl_enum_mode!($EnumMode, $EnumName, $EnumType, $($EnumField, $EnumValue),*);
-
     };
     (
         struct $StructName:ident $StructMode:tt {
@@ -154,77 +189,25 @@ macro_rules! impl_packet_data {
     };
 }
 
+
 #[macro_export]
 macro_rules! packet_data {
     (
         $(
-            $Keyword:ident $Name:ident $Mode:tt $(($TypeT:ident))? {
+            $Keyword:ident $Name:ident $Mode:tt $( ($TypeT:ident) )? {
                 $(
-                $StructField:ident: $($EnumValue:literal)?$($StructFieldType:ty)?
+                    $StructField:ident: $($EnumValue:literal)?$($StructFieldType:ty)?
                 ),*
             }
         )*
     ) => {
         $(
             $crate::impl_packet_data!(
-                $Keyword $Name $Mode $($TypeT)? {
+                $Keyword $Name $Mode $(($TypeT))? {
                     $($StructField: $($StructFieldType)? $($EnumValue)? ),*
                 }
             );
         )*
-    };
-}
-
-#[macro_export]
-macro_rules! impl_enum_mode {
-    ([read,write], $EnumName:ident, $EnumType:ty, $($EnumField:ident, $EnumValue:expr)*) => {
-        $crate::impl_enum_mode!([read], $EnumName, $EnumType, $($EnumField, $EnumValue)*);
-        $crate::impl_enum_mode!([write], $EnumName, $EnumType, $($EnumField, $EnumValue)*);
-    };
-    ([read], $EnumName:ident, $EnumType:ty, $($EnumField:ident, $EnumValue:expr)*) => {
-        impl $crate::io::Readable for $EnumName {
-            fn read<B: std::io::Read>(i: &mut B) -> anyhow::Result<Self> where Self: Sized {
-                use anyhow::Context;
-                let value = <$EnumType>::read(i)
-                    .context(concat!("failed to read value for enum `", stringify!($EnumName), "`"))?;
-                match value {
-                    $(
-                        v if v == $EnumValue => Ok($EnumName::$EnumField),
-                    )*
-                    _ => Err(anyhow::anyhow!("invalid enum value ({})", value)),
-                }
-            }
-        }
-    };
-    ([write], $EnumName:ident, $EnumType:ty, $($EnumField:ident, $EnumValue:expr)*) => {
-        impl $crate::io::Writable for $EnumName {
-            fn write<B: std::io::Write>(&mut self, o: &mut B) -> anyhow::Result<()> {
-                match self {
-                    $(
-                        $EnumName::$EnumField => <$EnumType>::write(&mut $EnumValue, o),
-                    )*
-                };
-                Ok(())
-            }
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! packet_enum {
-    (
-    enum $EnumName:ident $EnumMode:tt ($EnumType:ident) {
-            $( $EnumField:ident = $EnumValue:literal),*
-    }
-    ) => {
-
-        #[derive(Debug, Clone, PartialEq)]
-        enum $EnumName {
-            $($EnumField),*
-        }
-
-        $crate::impl_enum_mode!($EnumMode, $EnumName, $EnumType, $($EnumField, $EnumValue),*);
-
     };
 }
 

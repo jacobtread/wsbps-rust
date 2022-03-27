@@ -10,8 +10,12 @@ mod tests {
     fn it_works() {
 
         packet_data! {
-            enum Test [read,write] (u8) {
-                X = 1
+            struct TestStruct [read,write] {
+                a: u8
+            }
+
+            enum Test [write] (u8) {
+                X: 1
             }
         }
 
@@ -28,8 +32,7 @@ mod tests {
         let mut p = TestA {
             user: 12,
             test: TestStruct {
-                a: 8,
-                b: 7
+                a: 8
             }
         };
         println!("{:?}", p);
