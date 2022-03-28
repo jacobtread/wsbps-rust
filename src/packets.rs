@@ -1,6 +1,4 @@
-use std::io::{Read, Write};
-
-use crate::io::{Readable, VarInt, Writable};
+use crate::io::VarInt;
 
 /// ## Writable Type Macro
 /// A macro used internally to convert struct and packet field types
@@ -121,7 +119,7 @@ macro_rules! impl_enum_mode {
                 match self { // Match self
                     // For each of the fields map them to a write call for the type
                     // and the value for that type
-                    $($Name::$Field => <$Type>::write(&mut $Value, o),)*
+                    $($Name::$Field => <$Type>::write(&mut $Value, o)?,)*
                 };
                 Ok(())
             }
@@ -161,6 +159,7 @@ macro_rules! impl_packet_data {
     ) => {
         // Create the backing enum
         #[derive(Debug, Clone, PartialEq)]
+        #[allow(dead_code)]
         enum $Name {
             $($Field),*
         }

@@ -7,7 +7,7 @@ mod tests {
     use std::io::Cursor;
 
     use crate::{packet_data, packets};
-    // use crate::io::{Readable, VarInt, Writable};
+    use crate::io::{Readable, Writable};
 
     #[test]
     fn it_works() {
@@ -25,10 +25,11 @@ mod tests {
 
         packets! {
             BiPackets (<->) {
-                TestA (0x02) {
+                TestA (0x01) {
                     user: u8,
                     test: TestStruct
                 }
+                TestB (0x02) {}
             }
         }
 
