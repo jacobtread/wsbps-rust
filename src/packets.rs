@@ -6,13 +6,13 @@ use crate::io::VarInt;
 #[macro_export]
 macro_rules! writable_type {
     // Match VarInts
-    (VarInt, $e:expr) => {VarInt(*$e as u32)};
+    (VarInt, $e:expr) => { VarInt(*$e as u32) };
     // Match VarLongs
-    (VarLong, $e:expr) => {VarInt(*$e as u64)};
+    (VarLong, $e:expr) => { VarLong(*$e as u64)} ;
     // Match vectors
-    (Vec<$inner:ident>, $e:expr) => {Vec::from($e.as_slice())};
+    (Vec<$inner:ident>, $e:expr) => { Vec::from($e.as_slice()) };
     // Match all other types
-    ($typ:ty, $e:expr) => {$e};
+    ($typ:ty, $e:expr) => { $e };
 }
 
 /// ## Impl Struct Mode Macro
@@ -81,6 +81,17 @@ macro_rules! impl_struct_mode {
     };
 }
 
+
+#[macro_export]
+macro_rules! discriminant_to_literal {
+    (String, $discriminant:expr) => {
+        &*$discriminant
+    };
+    ($discriminant_type:ty, $discriminant:expr) => {
+        $discriminant.into()
+    };
+}
+
 /// ## Impl Enum Mode Macro
 /// This is the underlying backing macro which is used by the impl_packet_data macro which is used by the
 /// packet_data macro to generate the specific enum trait implementations for the desired packet mode
@@ -96,14 +107,13 @@ macro_rules! impl_enum_mode {
             fn read<B: std::io::Read>(i: &mut B) -> anyhow::Result<Self> where Self: Sized {
                 use anyhow::Context; // Use context from anyhow so .context can be used
                 // Use the io::Readable for the type parameter to encode it
-                let value = <$Type>::read(i)
-                    // Add additional context to error messages
-                    .context(concat!("failed to read value for enum `", stringify!($Name), "`"))?;
+                let value = $crate::discriminant_to_literal!($Type, <$Type>::read(i)
+                        .context(concat!("failed to read value for enum `", stringify!($Name), "`"))?);
                 match value { // Match the value that was read
                     // Match for all the enum fields. Matches will return the enum field
-                    $(v if v == $Value => Ok($Name::$Field),)*
+                    $($Value => Ok($Name::$Field),)*
                     // Errors are used if none match
-                    _ => Err(anyhow::anyhow!("invalid enum value ({})", value)),
+                    _ => Err(anyhow::anyhow!("invalid enum value ({:?})", value)),
                 }
             }
         }
@@ -119,7 +129,7 @@ macro_rules! impl_enum_mode {
                 match self { // Match self
                     // For each of the fields map them to a write call for the type
                     // and the value for that type
-                    $($Name::$Field => <$Type>::write(&mut $Value, o)?,)*
+                    $($Name::$Field => <$Type>::from($Value).write(o)?,)*
                 };
                 Ok(())
             }
@@ -453,7 +463,6 @@ macro_rules! packets {
         )*
     };
 }
-
 
 pub trait PacketVariant<Enum> {
     fn id() -> VarInt;

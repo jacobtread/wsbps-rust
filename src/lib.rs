@@ -1,33 +1,33 @@
+pub use io::{Readable, Writable};
+
 pub mod packets;
 pub mod io;
-pub use io::{Readable, Writable};
 
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
 
-    use crate::{packet_data, packets};
-    use crate::io::{Readable, Writable};
+    use crate::*;
+    use crate::io::VarInt;
 
     #[test]
     fn it_works() {
         packet_data! {
-            struct TestStruct (<->) {
-                a: u8,
-                b: u8,
-                c: u16
+            enum Test (<->) (VarInt) {
+                X: 1,
+                B: 999
             }
 
-            enum Test (->) (u8) {
-                X: 1
+            struct TestStruct (->) {
+                Name: String
             }
         }
+
 
         packets! {
             BiPackets (<->) {
                 TestA (0x01) {
-                    user: u8,
-                    test: TestStruct
+                    b: VarInt
                 }
                 TestB (0x02) {}
             }
@@ -35,12 +35,7 @@ mod tests {
 
 
         let mut p = TestA {
-            user: 12,
-            test: TestStruct {
-                a: 8,
-                b: 12,
-                c:400
-            },
+           b: VarInt(4294967295)
         };
         println!("{:?}", p);
 
@@ -51,7 +46,7 @@ mod tests {
                 println!("{:?}", o);
                 let mut s = Cursor::new(o);
                 match BiPackets::read(&mut s) {
-                    Err(_) => println!("Failed to decode"),
+                    Err(e) => println!("{:?}",e),
                     Ok(p) => {
                         match p {
                             BiPackets::TestA(p) => {
