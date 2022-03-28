@@ -4,24 +4,27 @@ pub mod io;
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
+
     use crate::{packet_data, packets};
-    use crate::io::{Readable, Writable};
+    use crate::io::{Readable, VarInt, Writable};
+
     #[test]
     fn it_works() {
-
         packet_data! {
-            struct TestStruct [read,write] {
-                a: u8
+            struct TestStruct (<->) {
+                a: u8,
+                b: u8,
+                c: u16
             }
 
-            enum Test [write] (u8) {
+            enum Test (->) (u8) {
                 X: 1
             }
         }
 
         packets! {
-            BiPackets [read,write] {
-                0x02: TestA {
+            BiPackets (<->) {
+                TestA (0x02) {
                     user: u8,
                     test: TestStruct
                 }
@@ -32,8 +35,10 @@ mod tests {
         let mut p = TestA {
             user: 12,
             test: TestStruct {
-                a: 8
-            }
+                a: 8,
+                b: 12,
+                c: 400,
+            },
         };
         println!("{:?}", p);
 
@@ -56,7 +61,6 @@ mod tests {
                 };
             }
         };
-
     }
 }
 
