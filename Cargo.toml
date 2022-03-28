@@ -1,6 +1,10 @@
 [package]
 name = "wsbps"
+description = "Websocket Binary Packet System"
 version = "0.1.0"
+authors = ["Jacobtread <jacobtread@gmail.com>"]
+license = "MIT"
+repository="https://github.com/jacobtread/wsbps-rust"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
