@@ -87,11 +87,11 @@ impl Readable for bool {
 /// | 300    | 10101100 00000010          |
 /// | 16384  | 10000000 10000000 00000001 |
 #[derive(Debug, Clone, PartialEq)]
-pub struct VarInt(pub u64);
+pub struct VarInt(pub u32);
 
-impl From<u64> for VarInt { fn from(v: u64) -> Self { VarInt(v) } }
+impl From<u32> for VarInt { fn from(v: u32) -> Self { VarInt(v) } }
 
-impl From<VarInt> for u64 { fn from(v: VarInt) -> Self { v.0 } }
+impl From<VarInt> for u32 { fn from(v: VarInt) -> Self { v.0 } }
 
 impl Writable for VarInt {
     fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
@@ -117,6 +117,51 @@ impl Readable for VarInt {
         let mut result = 0;
         loop {
             let read = i.read_u8()?;
+            let value = u32::from(read & 0b0111_1111 /* 0x7F */);
+            result |= value.overflowing_shl(byte_offset).0;
+            byte_offset += 7;
+            if byte_offset > 35 {
+                anyhow::bail!("VarInt overflow value was longer than 5 bytes");
+            }
+            if read & 0b1000_0000 /* 0x80 */ == 0 {
+                break;
+            }
+        }
+        Ok(VarInt(result))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct VarLong(pub u64);
+
+impl From<u64> for VarLong { fn from(v: u64) -> Self { VarLong(v) } }
+
+impl From<VarLong> for u64 { fn from(v: VarLong) -> Self { v.0 } }
+
+impl Writable for VarLong {
+    fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
+        let mut x = self.0;
+        loop {
+            let mut temp = (x & 0b0111_1111  /* 0x7F */) as u8;
+            x >>= 7;
+            if x != 0 {
+                temp |= 0b1000_0000 /* 0x80 */;
+            }
+            o.write_u8(temp).unwrap();
+            if x == 0 {
+                break;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl Readable for VarLong {
+    fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
+        let mut byte_offset = 0;
+        let mut result = 0;
+        loop {
+            let read = i.read_u8()?;
             let value = u64::from(read & 0b0111_1111 /* 0x7F */);
             result |= value.overflowing_shl(byte_offset).0;
             byte_offset += 7;
@@ -127,7 +172,7 @@ impl Readable for VarInt {
                 break;
             }
         }
-        Ok(VarInt(result))
+        Ok(VarLong(result))
     }
 }
 
@@ -136,7 +181,7 @@ impl Readable for VarInt {
 /// string contents
 impl Writable for String {
     fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
-        VarInt(self.len() as u64).write(o)?;
+        VarInt(self.len() as u32).write(o)?;
         o.write_all(self.as_bytes())?;
         Ok(())
     }
@@ -161,9 +206,8 @@ impl Readable for String {
 /// and then all the vectors are encoded after that using their
 /// respective encodings.
 impl<T: Writable> Writable for Vec<T> {
-
     fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
-        VarInt(self.len() as u64).write(o)?;
+        VarInt(self.len() as u32).write(o)?;
         self.iter_mut()
             .for_each(|it|
                 it.write(o).expect("couldn't write vec contents"));
@@ -227,7 +271,7 @@ impl<T: Readable> Readable for Option<T> {
 ///
 impl<K: Writable + Eq + Hash + Clone, V: Writable> Writable for HashMap<K, V> {
     fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
-        VarInt(self.len() as u64).write(o)?;
+        VarInt(self.len() as u32).write(o)?;
         for (key, value) in self {
             let mut kc = key.clone();
             K::write(&mut kc, o)?;

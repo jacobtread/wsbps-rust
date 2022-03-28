@@ -1,12 +1,13 @@
 pub mod packets;
 pub mod io;
+pub use io::{Readable, Writable};
 
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
 
     use crate::{packet_data, packets};
-    use crate::io::{Readable, VarInt, Writable};
+    // use crate::io::{Readable, VarInt, Writable};
 
     #[test]
     fn it_works() {
@@ -37,7 +38,7 @@ mod tests {
             test: TestStruct {
                 a: 8,
                 b: 12,
-                c: 400,
+                c:400
             },
         };
         println!("{:?}", p);

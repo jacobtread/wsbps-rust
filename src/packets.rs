@@ -8,7 +8,9 @@ use crate::io::{Readable, VarInt, Writable};
 #[macro_export]
 macro_rules! writable_type {
     // Match VarInts
-    (VarInt, $e:expr) => {VarInt(*$e as u64)};
+    (VarInt, $e:expr) => {VarInt(*$e as u32)};
+    // Match VarLongs
+    (VarLong, $e:expr) => {VarInt(*$e as u64)};
     // Match vectors
     (Vec<$inner:ident>, $e:expr) => {Vec::from($e.as_slice())};
     // Match all other types
@@ -230,7 +232,7 @@ macro_rules! packet_data {
             $Keyword:ident $Name:ident $Mode:tt $(($Type:ty))? {
                 $(
                     $Field:ident:$($EnumValue:literal)?$($FieldType:ty)?
-                ),*
+                ),* $(,)?
             }
         )*
     ) => {
@@ -277,7 +279,7 @@ macro_rules! impl_packet_mode {
         #[allow(unused_imports, unused_variables)]
         impl $crate::io::Writable for $Name {
             fn write<_ReadX: std::io::Write>(&mut self, o: &mut _ReadX) -> anyhow::Result<()> {
-                $crate::io::VarInt($ID as u64).write(o)?;
+                $crate::io::VarInt($ID as u32).write(o)?;
                 $($crate::writable_type!($Type, &mut self.$Field).write(o)?;)*
                 Ok(())
             }
@@ -337,7 +339,7 @@ macro_rules! impl_group_mode {
             // Implement packet variant for the packet name of this current group
             impl $crate::packets::PacketVariant<$Group> for $Name {
                 // Packet id function to allow retrieval of the packet ID on the packet
-                fn id() -> $crate::io::VarInt { $crate::io::VarInt($ID as u64) }
+                fn id() -> $crate::io::VarInt { $crate::io::VarInt($ID as u32) }
                 // Implement destructure function
                 fn destructure(e: $Group) -> Option<Self> where Self: Sized {
                     match e {
@@ -414,7 +416,7 @@ macro_rules! packets {
             $Group:ident $Mode:tt {
                  $(
                      $Name:ident ($ID:literal) {
-                            $($Field:ident: $Type:ty),*
+                            $($Field:ident: $Type:ty),* $(,)?
                      }
                  )*
             }
