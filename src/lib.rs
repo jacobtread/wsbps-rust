@@ -1,4 +1,4 @@
-pub use io::{Readable, Writable};
+pub use io::{Readable, Writable, VarInt, VarLong};
 
 pub mod packets;
 pub mod io;
