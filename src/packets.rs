@@ -170,7 +170,7 @@ macro_rules! impl_packet_data {
         // Create the backing enum
         #[derive(Debug, Clone, PartialEq)]
         #[allow(dead_code)]
-        enum $Name {
+        pub enum $Name {
             $($Field),*
         }
 
@@ -189,7 +189,7 @@ macro_rules! impl_packet_data {
     ) => {
         // Create the backing struct
         #[derive(Debug, Clone, PartialEq)]
-        struct $Name {
+        pub struct $Name {
             $($Field: $FieldType),*
         }
 
@@ -439,7 +439,7 @@ macro_rules! packets {
             $(
                 // Implement a struct for each packet
                 #[derive(Debug, Clone, PartialEq)]
-                struct $Name {
+                pub struct $Name {
                     $($Field: $Type),*
                 }
 
@@ -454,7 +454,7 @@ macro_rules! packets {
             // Implement the group enum
             #[derive(Debug, Clone, PartialEq)]
             #[allow(dead_code)]
-            enum $Group {
+            pub enum $Group {
                 $($Name($Name)),*
             }
 
