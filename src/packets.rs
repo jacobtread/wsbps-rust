@@ -373,7 +373,11 @@ macro_rules! impl_group_mode {
             }
         );
     };
-    ((->)) => { /* Write implementations are matched but ignored */ };
+    (
+        (->) $Group:ident {
+            $($Name:ident, $ID:literal),*
+        }
+    ) => { /* Write implementations are matched but ignored */ };
 }
 
 /// # Packets Macro
