@@ -39,7 +39,9 @@ mod tests {
         };
         println!("{:?}", p);
 
+
         let mut o = Vec::new();
+        (BiPackets::TestA(p)).write(&mut o);
         match p.write(&mut o) {
             Err(_) => println!("Failed to encode"),
             Ok(_) => {

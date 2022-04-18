@@ -365,10 +365,13 @@ macro_rules! impl_group_mode {
             $($Name:ident, $ID:literal),*
         }
     ) => {
-        // Read write only needs to implement reading because writing is not
-        // done from the group enum layer
         $crate::impl_group_mode!(
             (<-) $Group {
+                $($Name, $ID),*
+            }
+        );
+        $crate::impl_group_mode!(
+            (->) $Group {
                 $($Name, $ID),*
             }
         );
@@ -377,7 +380,17 @@ macro_rules! impl_group_mode {
         (->) $Group:ident {
             $($Name:ident, $ID:literal),*
         }
-    ) => { /* Write implementations are matched but ignored */ };
+    ) => {
+        impl $crate::io::Writable for $Group {
+            fn write<B: Write>(&mut self, o: &mut B) -> anyhow::Result<()> {
+                match self {
+                    $(
+                        $Group::$Name(value) => value.write(o),
+                    )*
+                }
+            }
+        }
+    };
 }
 
 /// # Packets Macro
