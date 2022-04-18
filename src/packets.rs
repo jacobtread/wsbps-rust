@@ -190,7 +190,7 @@ macro_rules! impl_packet_data {
         // Create the backing struct
         #[derive(Debug, Clone, PartialEq)]
         pub struct $Name {
-            $($Field: $FieldType),*
+            pub $($Field: $FieldType),*
         }
 
         // Implement the traits for the provided mode
@@ -440,7 +440,7 @@ macro_rules! packets {
                 // Implement a struct for each packet
                 #[derive(Debug, Clone, PartialEq)]
                 pub struct $Name {
-                    $($Field: $Type),*
+                    pub $($Field: $Type),*
                 }
 
                 // Implement the specified packet mode
