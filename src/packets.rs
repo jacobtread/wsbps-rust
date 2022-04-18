@@ -1,16 +1,14 @@
-use crate::io::VarInt;
-
 /// ## Writable Type Macro
 /// A macro used internally to convert struct and packet field types
 /// into writable types
 #[macro_export]
 macro_rules! writable_type {
     // Match VarInts
-    (VarInt, $e:expr) => { VarInt(*$e as u32) };
+    (VarInt, $e:expr) => { *$e };
     // Match VarLongs
-    (VarLong, $e:expr) => { VarLong(*$e as u64)} ;
+    (VarLong, $e:expr) => { *$e } ;
     // Match vectors
-    (Vec<$inner:ident>, $e:expr) => { Vec::from($e.as_slice()) };
+    (Vec<$inner:ident>, $e:expr) => { *$e };
     // Match all other types
     ($typ:ty, $e:expr) => { $e };
 }
@@ -26,22 +24,14 @@ macro_rules! impl_struct_mode {
         }
     ) => {
         // Implement the io::Readable trait so this struct can be read
-        impl $crate::io::Readable for $Name {
-            fn read<_ReadX: std::io::Read>(i: &mut _ReadX) -> anyhow::Result<Self> where Self: Sized {
-                use anyhow::Context; // Use context from anyhow so .context can be used
-                $(
-                    // Create a variable for each field and read with the field type
-                    let $Field = <$FieldType>::read(i)
-                        // Add additional context to error messages
-                        .context(concat!(
-                                "failed to read field `",
-                                stringify!($Field),
-                                "` of struct `",
-                                stringify!($Name), "`"))?.into();
-                )*
+        impl $crate::Readable for $Name {
+            fn read<_ReadX: std::io::Read>(i: &mut _ReadX) -> $crate::ReadResult<Self> where Self: Sized {
                 // Provide all the fields to a new struct of self
                 Ok(Self {
-                    $($Field,)*
+                    // Read all the fields for the struct
+                    $(
+                        $Field: <$FieldType>::read(i)?.into(),
+                    )*
                 })
             }
         }
@@ -53,8 +43,8 @@ macro_rules! impl_struct_mode {
     ) => {
         // Implement the io::Writable trait so the enum can be written
         #[allow(unused_imports, unused_variables)]
-        impl $crate::io::Writable for $Name {
-            fn write<_ReadX: std::io::Write>(&mut self, o: &mut _ReadX) -> anyhow::Result<()> {
+        impl $crate::Writable for $Name {
+            fn write<_ReadX: std::io::Write>(&mut self, o: &mut _ReadX) -> $crate::WriteResult {
                 // Create a write call for all of the fields using their type
                 $($crate::writable_type!($FieldType, &mut self.$Field).write(o)?;)*
                 Ok(())
@@ -103,17 +93,15 @@ macro_rules! impl_enum_mode {
         }
     ) => {
         // Implement the io::Readable trait so this enum can be read
-        impl $crate::io::Readable for $Name {
-            fn read<B: std::io::Read>(i: &mut B) -> anyhow::Result<Self> where Self: Sized {
-                use anyhow::Context; // Use context from anyhow so .context can be used
+        impl $crate::Readable for $Name {
+            fn read<B: std::io::Read>(i: &mut B) -> $crate::ReadResult<Self> where Self: Sized {
                 // Use the io::Readable for the type parameter to encode it
-                let value = $crate::discriminant_to_literal!($Type, <$Type>::read(i)
-                        .context(concat!("failed to read value for enum `", stringify!($Name), "`"))?);
+                let value = $crate::discriminant_to_literal!($Type, <$Type>::read(i)?);
                 match value { // Match the value that was read
                     // Match for all the enum fields. Matches will return the enum field
                     $($Value => Ok($Name::$Field),)*
                     // Errors are used if none match
-                    _ => Err(anyhow::anyhow!("invalid enum value ({:?})", value)),
+                    _ => Err($crate::PacketError::UnknownEnumValue),
                 }
             }
         }
@@ -124,8 +112,8 @@ macro_rules! impl_enum_mode {
         }
     ) => {
         // Implement the io::Writable trait so the enum can be written
-        impl $crate::io::Writable for $Name {
-            fn write<B: std::io::Write>(&mut self, o: &mut B) -> anyhow::Result<()> {
+        impl $crate::Writable for $Name {
+            fn write<B: std::io::Write>(&mut self, o: &mut B) -> $crate::WriteResult {
                 match self { // Match self
                     // For each of the fields map them to a write call for the type
                     // and the value for that type
@@ -256,65 +244,6 @@ macro_rules! packet_data {
     };
 }
 
-
-/// # Impl Packet Mode Macro
-/// This is the underlying backing macro for the packets macro this implements the specific packet
-/// mode for each individual packets
-#[macro_export]
-macro_rules! impl_packet_mode {
-    (
-        (<-) $Name:ident $ID:literal {
-            $($Field:ident, $Type:ty),*
-        }
-    ) => {
-        #[allow(unused_imports, unused_variables)]
-        impl $crate::io::Readable for $Name {
-            fn read<_ReadX: std::io::Read>(i: &mut _ReadX) -> anyhow::Result<Self> where Self: Sized {
-                use anyhow::Context;
-                $(
-                    let $Field = <$Type>::read(i)
-                      .context(concat!("failed to read field `", stringify!($Field), "` of packet `", stringify!($Name), "`"))?
-                      .into();
-                )*
-                Ok(Self { $($Field,)* })
-            }
-        }
-    };
-    (
-        (->) $Name:ident $ID:literal {
-            $($Field:ident, $Type:ty),*
-        }
-    ) => {
-        #[allow(unused_imports, unused_variables)]
-        impl $crate::io::Writable for $Name {
-            fn write<_ReadX: std::io::Write>(&mut self, o: &mut _ReadX) -> anyhow::Result<()> {
-                $crate::io::VarInt($ID as u32).write(o)?;
-                $($crate::writable_type!($Type, &mut self.$Field).write(o)?;)*
-                Ok(())
-            }
-        }
-    };
-    (
-        (<->) $Name:ident $ID:literal {
-            $($Field:ident, $Type:ty),*
-        }
-    ) => {
-        // Pass the parameters onto the read implementation
-        $crate::impl_packet_mode!(
-            (<-) $Name $ID {
-                $($Field, $Type),*
-            }
-        );
-        // Pass the parameters onto the write implementation
-        $crate::impl_packet_mode!(
-            (->) $Name $ID {
-                $($Field, $Type),*
-            }
-        );
-    };
-}
-
-
 /// # Impl Group Mode Macro
 /// This macro implements the specific read/write mode for the group. This also implements the traits
 /// for each specific mode.
@@ -322,74 +251,86 @@ macro_rules! impl_packet_mode {
 macro_rules! impl_group_mode {
     (
         (<-) $Group:ident {
-            $($Name:ident, $ID:literal),*
+            $(
+                $Name:ident, $ID:literal {
+                    $($Field:ident, $Type:ty),*
+                }
+            );*
         }
     ) => {
         // Implement the io::Readable trait so this enum can be read this must be
         // implemented here so we can read the packet ID first then read the
         // respective packet
-        impl $crate::io::Readable for $Group {
-            fn read<_ReadX: std::io::Read>(i: &mut _ReadX) -> anyhow::Result<Self> {
-                let p_id = $crate::io::VarInt::read(i)?.0;
+        impl $crate::Readable for $Group {
+            fn read<_ReadX: std::io::Read>(i: &mut _ReadX) -> $crate::ReadResult<Self> {
+                let p_id = $crate::VarInt::read(i)?.0;
                 match p_id {
                     // Match for all the packet IDS and read the packet struct and return
                     // the enum value with the struct as the value
-                    $(id if id == $ID => Ok($Group::$Name($Name::read(i)?)),)*
-                    _ => Err(anyhow::anyhow!("unknown packet id ({})", p_id)),
+                    $(
+                        $ID => Ok($Group::$Name {
+                            $(
+                                $Field: <$Type>::read(i)?.into(),
+                            )*
+                        }),
+                    )*
+                    _ => Err($crate::PacketError::UnknownPacket(p_id))
                 }
             }
         }
-
-        $(
-            // Implement conversion of packets from the group for each packet name
-            // to allow conversion between packets and the enum representation.
-            impl From<$Name> for $Group { fn from(p: $Name) -> Self { $Group::$Name(p) }}
-
-            // Implement packet variant for the packet name of this current group
-            impl $crate::packets::PacketVariant<$Group> for $Name {
-                // Packet id function to allow retrieval of the packet ID on the packet
-                fn id() -> $crate::io::VarInt { $crate::io::VarInt($ID as u32) }
-                // Implement destructure function
-                fn destructure(e: $Group) -> Option<Self> where Self: Sized {
-                    match e {
-                        // Match the enum name and return some with that value
-                        $Group::$Name(p) => Some(p),
-                        _ => None,
-                    }
+    };
+    (
+        (->) $Group:ident {
+            $(
+                $Name:ident, $ID:literal {
+                    $($Field:ident, $Type:ty),*
                 }
+            );*
+        }
+    ) => {
+        impl $crate::Writable for $Group {
+            fn write<_WriteX: std::io::Write>(&mut self, o: &mut _WriteX) -> $crate::WriteResult {
+                match self {
+                    $(
+                        $Group::$Name {
+                            $($Field),*
+                        } => {
+                            $crate::VarInt($ID as u32).write(o)?;
+                            $($crate::writable_type!($Type, $Field).write(o)?;)*
+                        },
+                    )*
+                }
+                Ok(())
             }
-        )*
+        }
     };
     (
         (<->) $Group:ident {
-            $($Name:ident, $ID:literal),*
+            $(
+                $Name:ident, $ID:literal {
+                    $($Field:ident, $Type:ty),*
+                }
+            );*
         }
     ) => {
         $crate::impl_group_mode!(
             (<-) $Group {
-                $($Name, $ID),*
+                $(
+                    $Name, $ID {
+                        $($Field, $Type),*
+                    }
+                );*
             }
         );
         $crate::impl_group_mode!(
-            (->) $Group {
-                $($Name, $ID),*
+           (->) $Group {
+                $(
+                    $Name, $ID {
+                        $($Field, $Type),*
+                    }
+                );*
             }
         );
-    };
-    (
-        (->) $Group:ident {
-            $($Name:ident, $ID:literal),*
-        }
-    ) => {
-        impl $crate::io::Writable for $Group {
-            fn write<_WriteX: std::io::Write>(&mut self, o: &mut _WriteX) -> anyhow::Result<()> {
-                match self {
-                    $(
-                        $Group::$Name(value) => value.write(o),
-                    )*
-                }
-            }
-        }
     };
 }
 
@@ -449,39 +390,39 @@ macro_rules! packets {
         )*
     ) => {
         $(
-            $(
-                // Implement a struct for each packet
-                #[derive(Debug, Clone, PartialEq)]
-                pub struct $Name {
-                    $(pub $Field: $Type),*
-                }
-
-                // Implement the specified packet mode
-                $crate::impl_packet_mode!(
-                    $Mode $Name $ID {
-                        $($Field, $Type),*
-                    }
-                );
-            )*
-
             // Implement the group enum
             #[derive(Debug, Clone, PartialEq)]
             #[allow(dead_code)]
             pub enum $Group {
-                $($Name($Name)),*
+                $(
+                    $Name {
+                        $(
+                            $Field: $Type,
+                        )*
+                    }
+                ),*
             }
 
             // Implement the specified group mode
             $crate::impl_group_mode!(
                 $Mode $Group {
-                    $($Name, $ID),*
+                    $(
+                        $Name, $ID {
+                            $($Field, $Type),*
+                        }
+                    );*
                 }
             );
+
+            // Implement packet variant ID for each packet enum value
+            impl $Group {
+                // Packet id function to allow retrieval of the packet ID on the packet
+                fn id(&self) -> $crate::VarInt {
+                    $crate::VarInt(match self {
+                        $($Group::$Name { .. } => $ID as u32,)*
+                    })
+                }
+            }
         )*
     };
-}
-
-pub trait PacketVariant<Enum> {
-    fn id() -> VarInt;
-    fn destructure(e: Enum) -> Option<Self> where Self: Sized;
 }

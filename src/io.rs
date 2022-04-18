@@ -3,17 +3,21 @@ use std::hash::Hash;
 use std::io::{Read, Write};
 use std::iter;
 
-use anyhow::{Context, Result};
 use byteorder::{ReadBytesExt, WriteBytesExt};
+use crate::error::PacketError;
+
+pub type PacketResult<T: Readable> = Result<T, PacketError>;
+pub type WriteResult = PacketResult<()>;
+pub type ReadResult<T: Readable> = PacketResult<T>;
 
 pub trait Readable: Send + Sync {
     /// Reads self from the provided source [i]
-    fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized;
+    fn read<B: Read>(i: &mut B) -> ReadResult<Self> where Self: Sized;
 }
 
 pub trait Writable: Send + Sync {
     // Writes self to the the provided source [o]
-    fn write<B: Write>(&mut self, o: &mut B) -> Result<()>;
+    fn write<B: Write>(&mut self, o: &mut B) -> WriteResult;
 }
 
 
@@ -21,47 +25,47 @@ pub trait Writable: Send + Sync {
 /// the underlying function in ReadBytesExt doesn't take a generic
 /// argument like the other primitive number ones do
 impl Writable for u8 {
-    fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
+    fn write<B: Write>(&mut self, o: &mut B) -> WriteResult {
         o.write_u8(*self)?;
         Ok(())
     }
 }
 
 impl Readable for u8 {
-    fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
-        B::read_u8(i).map_err(anyhow::Error::from)
+    fn read<B: Read>(i: &mut B) -> ReadResult<Self> where Self: Sized {
+        B::read_u8(i).map_err(PacketError::from)
     }
 }
 
 impl Writable for i8 {
-    fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
+    fn write<B: Write>(&mut self, o: &mut B) -> WriteResult {
         o.write_i8(*self)?;
         Ok(())
     }
 }
 
 impl Readable for i8 {
-    fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
-        B::read_i8(i).map_err(anyhow::Error::from)
+    fn read<B: Read>(i: &mut B) -> ReadResult<Self> where Self: Sized {
+        B::read_i8(i).map_err(PacketError::from)
     }
 }
 
 /// Boolean values are encoded as a single unsigned byte (u8)
 /// 1 being true and 0 being false
 impl Writable for bool {
-    fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
+    fn write<B: Write>(&mut self, o: &mut B) -> WriteResult {
         o.write_u8(*self as u8)?;
         Ok(())
     }
 }
 
 impl Readable for bool {
-    fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
+    fn read<B: Read>(i: &mut B) -> ReadResult<Self> where Self: Sized {
         let byte = u8::read(i)?;
         match byte {
             0 => Ok(false),
             1 => Ok(true),
-            _ => anyhow::bail!("invalid boolean expected 0 or 1")
+            _ => Err(PacketError::UnexpectedValue("expected 0 or 1 for boolean value"))
         }
     }
 }
@@ -94,7 +98,7 @@ impl From<u32> for VarInt { fn from(v: u32) -> Self { VarInt(v) } }
 impl From<VarInt> for u32 { fn from(v: VarInt) -> Self { v.0 } }
 
 impl Writable for VarInt {
-    fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
+    fn write<B: Write>(&mut self, o: &mut B) -> WriteResult {
         let mut x = self.0;
         loop {
             let mut temp = (x & 0b0111_1111  /* 0x7F */) as u8;
@@ -112,7 +116,7 @@ impl Writable for VarInt {
 }
 
 impl Readable for VarInt {
-    fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
+    fn read<B: Read>(i: &mut B) -> ReadResult<Self> where Self: Sized {
         let mut byte_offset = 0;
         let mut result = 0;
         loop {
@@ -121,7 +125,7 @@ impl Readable for VarInt {
             result |= value.overflowing_shl(byte_offset).0;
             byte_offset += 7;
             if byte_offset > 35 {
-                anyhow::bail!("VarInt overflow value was longer than 5 bytes");
+                Err(PacketError::VarOverflow("int", 5))?;
             }
             if read & 0b1000_0000 /* 0x80 */ == 0 {
                 break;
@@ -139,7 +143,7 @@ impl From<u64> for VarLong { fn from(v: u64) -> Self { VarLong(v) } }
 impl From<VarLong> for u64 { fn from(v: VarLong) -> Self { v.0 } }
 
 impl Writable for VarLong {
-    fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
+    fn write<B: Write>(&mut self, o: &mut B) -> WriteResult {
         let mut x = self.0;
         loop {
             let mut temp = (x & 0b0111_1111  /* 0x7F */) as u8;
@@ -157,7 +161,7 @@ impl Writable for VarLong {
 }
 
 impl Readable for VarLong {
-    fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
+    fn read<B: Read>(i: &mut B) -> ReadResult<Self> where Self: Sized {
         let mut byte_offset = 0;
         let mut result = 0;
         loop {
@@ -166,7 +170,7 @@ impl Readable for VarLong {
             result |= value.overflowing_shl(byte_offset).0;
             byte_offset += 7;
             if byte_offset > 70 {
-                anyhow::bail!("VarInt overflow value was longer than 10 bytes");
+                Err(PacketError::VarOverflow("long", 10))?;
             }
             if read & 0b1000_0000 /* 0x80 */ == 0 {
                 break;
@@ -180,7 +184,7 @@ impl Readable for VarLong {
 /// and then the bytes for the specified length are the utf8 encoded bytes of the
 /// string contents
 impl Writable for String {
-    fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
+    fn write<B: Write>(&mut self, o: &mut B) -> WriteResult {
         VarInt(self.len() as u32).write(o)?;
         o.write_all(self.as_bytes())?;
         Ok(())
@@ -188,17 +192,16 @@ impl Writable for String {
 }
 
 impl Readable for String {
-    fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
-        let length = VarInt::read(i)
-            .context("invalid string length varint")?.0 as usize;
+    fn read<B: Read>(i: &mut B) -> ReadResult<Self> where Self: Sized {
+        let length = VarInt::read(i)?.0 as usize;
         let max_length = i16::MAX as usize;
         if length > max_length {
-            anyhow::bail!("string length ({}) was greater than max string length size ({})", length, max_length)
+            Err(PacketError::InvalidStringLength(length, max_length))?;
         }
         let mut bytes = vec![0u8; length];
         i.read_exact(&mut bytes)
-            .map_err(anyhow::Error::from)?;
-        Ok(String::from_utf8(bytes).context("string contained invalid utf8 encoding")?)
+            .map_err(PacketError::from)?;
+        String::from_utf8(bytes).map_err(PacketError::from)
     }
 }
 
@@ -206,7 +209,7 @@ impl Readable for String {
 /// and then all the vectors are encoded after that using their
 /// respective encodings.
 impl<T: Writable> Writable for Vec<T> {
-    fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
+    fn write<B: Write>(&mut self, o: &mut B) -> WriteResult {
         VarInt(self.len() as u32).write(o)?;
         self.iter_mut()
             .for_each(|it|
@@ -216,12 +219,11 @@ impl<T: Writable> Writable for Vec<T> {
 }
 
 impl<T: Readable> Readable for Vec<T> {
-    fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
-        let length = VarInt::read(i)
-            .context("invalid vec length varint")?.0 as usize;
+    fn read<B: Read>(i: &mut B) -> ReadResult<Self> where Self: Sized {
+        let length = VarInt::read(i)?.0 as usize;
         iter::repeat_with(|| T::read(i))
             .take(length)
-            .collect::<anyhow::Result<Vec<T>>>()
+            .collect::<ReadResult<Vec<T>>>()
     }
 }
 
@@ -229,7 +231,7 @@ impl<T: Readable> Readable for Vec<T> {
 /// whether or not the value is present. If the value is present the respective
 /// Writable/Readable will be used.
 impl<T: Writable> Writable for Option<T> {
-    fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
+    fn write<B: Write>(&mut self, o: &mut B) -> WriteResult {
         match self {
             Some(value) => {
                 true.write(o)?;
@@ -244,7 +246,7 @@ impl<T: Writable> Writable for Option<T> {
 }
 
 impl<T: Readable> Readable for Option<T> {
-    fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
+    fn read<B: Read>(i: &mut B) -> ReadResult<Self> where Self: Sized {
         let exists = bool::read(i)?;
         if exists {
             Ok(Some(T::read(i)?))
@@ -270,7 +272,7 @@ impl<T: Readable> Readable for Option<T> {
 ///
 ///
 impl<K: Writable + Eq + Hash + Clone, V: Writable> Writable for HashMap<K, V> {
-    fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
+    fn write<B: Write>(&mut self, o: &mut B) -> WriteResult {
         VarInt(self.len() as u32).write(o)?;
         for (key, value) in self {
             let mut kc = key.clone();
@@ -282,9 +284,8 @@ impl<K: Writable + Eq + Hash + Clone, V: Writable> Writable for HashMap<K, V> {
 }
 
 impl<K: Readable + Eq + Hash + Clone, V: Readable> Readable for HashMap<K, V> {
-    fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
-        let length = VarInt::read(i)
-            .context("invalid hashmap length varint")?.0 as usize;
+    fn read<B: Read>(i: &mut B) -> ReadResult<Self> where Self: Sized {
+        let length = VarInt::read(i)?.0 as usize;
         let mut out = HashMap::with_capacity(length);
         for _ in 0..length {
             let key = K::read(i)?;
@@ -304,16 +305,16 @@ macro_rules! generate_rw {
     ) => {
         $(
             impl Writable for $type {
-                fn write<B: Write>(&mut self, o: &mut B) -> Result<()> {
+                fn write<B: Write>(&mut self, o: &mut B) -> WriteResult {
                     o.$write_fn::<byteorder::BigEndian>(*self)?;
                     Ok(())
                 }
             }
 
             impl Readable for $type {
-                fn read<B: Read>(i: &mut B) -> Result<Self> where Self: Sized {
+                fn read<B: Read>(i: &mut B) -> ReadResult<Self> where Self: Sized {
                     i.$read_fn::<byteorder::BigEndian>()
-                        .map_err(anyhow::Error::from)
+                        .map_err(PacketError::from)
                 }
             }
         )*
