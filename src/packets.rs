@@ -382,7 +382,7 @@ macro_rules! impl_group_mode {
         }
     ) => {
         impl $crate::io::Writable for $Group {
-            fn write<B: Write>(&mut self, o: &mut B) -> anyhow::Result<()> {
+            fn write<_WriteX: std::io::Write>(&mut self, o: &mut _WriteX) -> anyhow::Result<()> {
                 match self {
                     $(
                         $Group::$Name(value) => value.write(o),
