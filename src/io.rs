@@ -6,9 +6,9 @@ use std::iter;
 use byteorder::{ReadBytesExt, WriteBytesExt};
 use crate::error::PacketError;
 
-pub type PacketResult<T: Readable> = Result<T, PacketError>;
+pub type PacketResult<T> = Result<T, PacketError>;
 pub type WriteResult = PacketResult<()>;
-pub type ReadResult<T: Readable> = PacketResult<T>;
+pub type ReadResult<T> = PacketResult<T>;
 
 pub trait Readable: Send + Sync {
     /// Reads self from the provided source [i]

@@ -20,7 +20,7 @@ mod tests {
             }
 
             struct TestStruct (->) {
-                Name: String
+                name: String
             }
         }
 
@@ -44,7 +44,6 @@ mod tests {
 
 
         let mut o = Vec::new();
-        (p).write(&mut o);
         match p.write(&mut o) {
             Err(_) => println!("Failed to encode"),
             Ok(_) => {
